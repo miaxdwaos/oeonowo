@@ -2,41 +2,34 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Joystick Game</title>
+    <title>Multiplayer P2P - PC Controls</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #222; font-family: sans-serif; }
-        #ui { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; }
-        canvas { display: block; background: #333; }
-        
-        /* Estilo del Joystick */
-        #joystick-container {
-            position: absolute; bottom: 50px; left: 50px;
-            width: 120px; height: 120px; background: rgba(255,255,255,0.1);
-            border-radius: 50%; touch-action: none;
+        body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #ui { 
+            position: absolute; top: 20px; left: 20px; 
+            background: rgba(0, 0, 0, 0.7); padding: 15px; 
+            border-radius: 8px; color: white; z-index: 10;
+            border: 1px solid #444;
         }
-        #joystick-knob {
-            position: absolute; width: 50px; height: 50px;
-            background: rgba(255,255,255,0.5); border-radius: 50%;
-            top: 35px; left: 35px;
-        }
+        canvas { display: block; }
+        input { padding: 5px; border-radius: 4px; border: none; }
+        button { cursor: pointer; padding: 5px 10px; background: #007bff; color: white; border: none; border-radius: 4px; }
+        b { color: #00ffcc; }
     </style>
 </head>
 <body>
 
 <div id="ui">
-    <div>Tu ID: <b id="my-id">...</b></div>
-    <input type="text" id="peer-id-input" placeholder="ID del amigo">
-    <button onclick="connectToPeer()">Conectar</button>
-    <p id="status">Esperando conexión...</p>
+    <div>Tu ID: <b id="my-id">Generando...</b></div>
+    <div style="margin-top: 10px;">
+        <input type="text" id="peer-id-input" placeholder="ID de tu amigo">
+        <button onclick="connectToPeer()">Conectar</button>
+    </div>
+    <p id="status" style="font-size: 0.8em; color: #aaa;">Usa las FLECHAS o WASD para moverte</p>
 </div>
 
 <canvas id="gameCanvas"></canvas>
-
-<div id="joystick-container">
-    <div id="joystick-knob"></div>
-</div>
 
 <script>
     const canvas = document.getElementById('gameCanvas');
@@ -44,93 +37,112 @@
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    // --- Lógica de PeerJS ---
-    const peer = new Peer(); // Crea un ID aleatorio automáticamente
+    // --- Configuración de Red (P2P) ---
+    const peer = new Peer();
     let conn;
-    let players = {}; // Guardar posición de jugadores {id: {x, y, color}}
+    let players = {}; 
     let myId;
 
     peer.on('open', (id) => {
         myId = id;
         document.getElementById('my-id').innerText = id;
-        players[id] = { x: 100, y: 100, color: 'cyan' };
+        // Creamos nuestro jugador local
+        players[id] = { x: canvas.width/2, y: canvas.height/2, color: '#00ffcc', name: 'Yo' };
     });
 
-    // Escuchar conexiones entrantes (si tú eres el "host")
     peer.on('connection', (connection) => {
         setupConnection(connection);
     });
 
     function connectToPeer() {
         const peerId = document.getElementById('peer-id-input').value;
-        const connection = peer.connect(peerId);
-        setupConnection(connection);
+        setupConnection(peer.connect(peerId));
     }
 
     function setupConnection(connection) {
         conn = connection;
         conn.on('open', () => {
-            document.getElementById('status').innerText = "¡Conectado!";
-            // Enviar mi posición inicial
+            document.getElementById('status').innerText = "¡Conectado con éxito!";
+            document.getElementById('status').style.color = "#00ff00";
+            
+            // Enviamos nuestra posición 60 veces por segundo
             setInterval(() => {
-                conn.send({ id: myId, x: players[myId].x, y: players[myId].y });
-            }, 50);
+                if(conn.open) {
+                    conn.send({ id: myId, x: players[myId].x, y: players[myId].y });
+                }
+            }, 1000/60);
         });
 
         conn.on('data', (data) => {
-            // Actualizar posición del otro jugador
-            players[data.id] = { x: data.x, y: data.y, color: 'red' };
+            // Actualizamos (o creamos) al otro jugador con los datos recibidos
+            players[data.id] = { x: data.x, y: data.y, color: '#ff4444', name: 'Amigo' };
         });
     }
 
-    // --- Lógica del Joystick ---
-    const knob = document.getElementById('joystick-knob');
-    const container = document.getElementById('joystick-container');
-    let moveX = 0, moveY = 0;
+    // --- Control por Teclado ---
+    const keys = {};
+    window.addEventListener('keydown', e => keys[e.code] = true);
+    window.addEventListener('keyup', e => keys[e.code] = false);
 
-    container.addEventListener('touchstart', handleStick);
-    container.addEventListener('touchmove', handleStick);
-    container.addEventListener('touchend', () => {
-        knob.style.transform = `translate(0px, 0px)`;
-        moveX = 0; moveY = 0;
-    });
+    function handleMovement() {
+        if (!players[myId]) return;
 
-    function handleStick(e) {
-        const rect = container.getBoundingClientRect();
-        const touch = e.touches[0];
-        const centerX = rect.left + rect.width / 2;
-        const centerY = rect.top + rect.height / 2;
-        
-        let dx = touch.clientX - centerX;
-        let dy = touch.clientY - centerY;
-        const distance = Math.min(Math.sqrt(dx*dx + dy*dy), 50);
-        const angle = Math.atan2(dy, dx);
+        const speed = 5;
+        // Flechas o WASD
+        if (keys['ArrowUp'] || keys['KeyW']) players[myId].y -= speed;
+        if (keys['ArrowDown'] || keys['KeyS']) players[myId].y += speed;
+        if (keys['ArrowLeft'] || keys['KeyA']) players[myId].x -= speed;
+        if (keys['ArrowRight'] || keys['KeyD']) players[myId].x += speed;
 
-        moveX = Math.cos(angle) * (distance / 50) * 5;
-        moveY = Math.sin(angle) * (distance / 50) * 5;
-
-        knob.style.transform = `translate(${Math.cos(angle)*distance}px, ${Math.sin(angle)*distance}px)`;
+        // Limites de pantalla básicos
+        players[myId].x = Math.max(0, Math.min(canvas.width - 30, players[myId].x));
+        players[myId].y = Math.max(0, Math.min(canvas.height - 30, players[myId].y));
     }
 
-    // --- Loop del Juego ---
-    function update() {
-        if (players[myId]) {
-            players[myId].x += moveX;
-            players[myId].y += moveY;
+    // --- Ciclo de Renderizado ---
+    function draw() {
+        handleMovement();
+        
+        // Fondo
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Dibujar cuadrícula de fondo (opcional, para referencia)
+        ctx.strokeStyle = '#333';
+        for(let i=0; i<canvas.width; i+=50) {
+            ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i, canvas.height); ctx.stroke();
+        }
+        for(let i=0; i<canvas.height; i+=50) {
+            ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(canvas.width, i); ctx.stroke();
         }
 
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
+        // Dibujar jugadores
         for (let id in players) {
             const p = players[id];
+            
+            // Cuerpo
             ctx.fillStyle = p.color;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = p.color;
             ctx.fillRect(p.x, p.y, 30, 30);
+            
+            // Nombre o etiqueta
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = "white";
+            ctx.font = "12px Arial";
+            ctx.fillText(p.name, p.x, p.y - 10);
         }
-        
-        requestAnimationFrame(update);
-    }
-    update();
 
+        requestAnimationFrame(draw);
+    }
+
+    draw();
+
+    // Ajustar canvas si se cambia el tamaño de ventana
+    window.onresize = () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    };
 </script>
 </body>
 </html>
