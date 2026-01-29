@@ -2,34 +2,45 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Multiplayer P2P - PC Controls</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Multiplayer P2P - WASD & Joystick</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        #ui { 
-            position: absolute; top: 20px; left: 20px; 
-            background: rgba(0, 0, 0, 0.7); padding: 15px; 
-            border-radius: 8px; color: white; z-index: 10;
-            border: 1px solid #444;
-        }
-        canvas { display: block; }
+        body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: 'Segoe UI', sans-serif; }
+        #ui { position: absolute; top: 15px; left: 15px; color: white; z-index: 10; background: rgba(0,0,0,0.5); padding: 15px; border-radius: 8px; }
         input { padding: 5px; border-radius: 4px; border: none; }
-        button { cursor: pointer; padding: 5px 10px; background: #007bff; color: white; border: none; border-radius: 4px; }
-        b { color: #00ffcc; }
+        button { cursor: pointer; padding: 5px 10px; background: #2ecc71; border: none; color: white; border-radius: 4px; }
+        canvas { display: block; }
+        
+        /* Joystick visible solo en táctil (opcional) */
+        #joystick-container {
+            position: absolute; bottom: 50px; left: 50px;
+            width: 120px; height: 120px; background: rgba(255,255,255,0.1);
+            border-radius: 50%; touch-action: none; border: 2px solid rgba(255,255,255,0.2);
+        }
+        #joystick-knob {
+            position: absolute; width: 50px; height: 50px;
+            background: rgba(255,255,255,0.5); border-radius: 50%;
+            top: 35px; left: 35px; pointer-events: none;
+        }
     </style>
 </head>
 <body>
 
 <div id="ui">
-    <div>Tu ID: <b id="my-id">Generando...</b></div>
-    <div style="margin-top: 10px;">
+    <div>Tu ID: <b id="my-id">Cargando...</b></div>
+    <div style="margin-top:10px;">
         <input type="text" id="peer-id-input" placeholder="ID de tu amigo">
         <button onclick="connectToPeer()">Conectar</button>
     </div>
-    <p id="status" style="font-size: 0.8em; color: #aaa;">Usa las FLECHAS o WASD para moverte</p>
+    <p id="status" style="font-size: 12px; color: #aaa;">Copia tu ID y pásalo a un amigo para jugar.</p>
 </div>
 
 <canvas id="gameCanvas"></canvas>
+
+<div id="joystick-container">
+    <div id="joystick-knob"></div>
+</div>
 
 <script>
     const canvas = document.getElementById('gameCanvas');
@@ -37,17 +48,17 @@
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
 
-    // --- Configuración de Red (P2P) ---
+    // --- Configuración de Red ---
     const peer = new Peer();
     let conn;
     let players = {}; 
     let myId;
+    const SPEED = 5;
 
     peer.on('open', (id) => {
         myId = id;
         document.getElementById('my-id').innerText = id;
-        // Creamos nuestro jugador local
-        players[id] = { x: canvas.width/2, y: canvas.height/2, color: '#00ffcc', name: 'Yo' };
+        players[id] = { x: canvas.width/2, y: canvas.height/2, color: '#3498db' };
     });
 
     peer.on('connection', (connection) => {
@@ -62,87 +73,81 @@
     function setupConnection(connection) {
         conn = connection;
         conn.on('open', () => {
-            document.getElementById('status').innerText = "¡Conectado con éxito!";
-            document.getElementById('status').style.color = "#00ff00";
-            
-            // Enviamos nuestra posición 60 veces por segundo
+            document.getElementById('status').innerText = "¡Conectado con el oponente!";
             setInterval(() => {
-                if(conn.open) {
-                    conn.send({ id: myId, x: players[myId].x, y: players[myId].y });
-                }
-            }, 1000/60);
+                if(conn.open) conn.send({ id: myId, x: players[myId].x, y: players[myId].y });
+            }, 30);
         });
-
         conn.on('data', (data) => {
-            // Actualizamos (o creamos) al otro jugador con los datos recibidos
-            players[data.id] = { x: data.x, y: data.y, color: '#ff4444', name: 'Amigo' };
+            players[data.id] = { x: data.x, y: data.y, color: '#e74c3c' };
         });
     }
 
-    // --- Control por Teclado ---
-    const keys = {};
-    window.addEventListener('keydown', e => keys[e.code] = true);
-    window.addEventListener('keyup', e => keys[e.code] = false);
+    // --- Control de Movimiento (WASD + Joystick) ---
+    let keys = {};
+    let joyX = 0, joyY = 0;
 
-    function handleMovement() {
-        if (!players[myId]) return;
+    window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
 
-        const speed = 5;
-        // Flechas o WASD
-        if (keys['ArrowUp'] || keys['KeyW']) players[myId].y -= speed;
-        if (keys['ArrowDown'] || keys['KeyS']) players[myId].y += speed;
-        if (keys['ArrowLeft'] || keys['KeyA']) players[myId].x -= speed;
-        if (keys['ArrowRight'] || keys['KeyD']) players[myId].x += speed;
+    // Lógica Joystick
+    const knob = document.getElementById('joystick-knob');
+    const container = document.getElementById('joystick-container');
+    
+    container.addEventListener('touchstart', handleStick);
+    container.addEventListener('touchmove', (e) => { e.preventDefault(); handleStick(e); }, {passive: false});
+    container.addEventListener('touchend', () => {
+        knob.style.transform = `translate(0px, 0px)`;
+        joyX = 0; joyY = 0;
+    });
 
-        // Limites de pantalla básicos
-        players[myId].x = Math.max(0, Math.min(canvas.width - 30, players[myId].x));
-        players[myId].y = Math.max(0, Math.min(canvas.height - 30, players[myId].y));
+    function handleStick(e) {
+        const rect = container.getBoundingClientRect();
+        const touch = e.touches[0];
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const dx = touch.clientX - centerX;
+        const dy = touch.clientY - centerY;
+        const dist = Math.min(Math.sqrt(dx*dx + dy*dy), 50);
+        const angle = Math.atan2(dy, dx);
+        
+        joyX = Math.cos(angle) * (dist / 50) * SPEED;
+        joyY = Math.sin(angle) * (dist / 50) * SPEED;
+        knob.style.transform = `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px)`;
     }
 
-    // --- Ciclo de Renderizado ---
-    function draw() {
-        handleMovement();
-        
-        // Fondo
+    // --- Bucle de Renderizado ---
+    function update() {
+        if (players[myId]) {
+            // Combinar Teclado
+            if (keys['w'] || keys['arrowup']) players[myId].y -= SPEED;
+            if (keys['s'] || keys['arrowdown']) players[myId].y += SPEED;
+            if (keys['a'] || keys['arrowleft']) players[myId].x -= SPEED;
+            if (keys['d'] || keys['arrowright']) players[myId].x += SPEED;
+
+            // Combinar Joystick
+            players[myId].x += joyX;
+            players[myId].y += joyY;
+        }
+
         ctx.fillStyle = '#1a1a1a';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Dibujar cuadrícula de fondo (opcional, para referencia)
-        ctx.strokeStyle = '#333';
-        for(let i=0; i<canvas.width; i+=50) {
-            ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i, canvas.height); ctx.stroke();
-        }
-        for(let i=0; i<canvas.height; i+=50) {
-            ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(canvas.width, i); ctx.stroke();
-        }
-
-        // Dibujar jugadores
+        
         for (let id in players) {
             const p = players[id];
-            
-            // Cuerpo
             ctx.fillStyle = p.color;
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = p.color;
-            ctx.fillRect(p.x, p.y, 30, 30);
-            
-            // Nombre o etiqueta
-            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
+            ctx.fill();
+            // Dibujar ID pequeño arriba del jugador
             ctx.fillStyle = "white";
-            ctx.font = "12px Arial";
-            ctx.fillText(p.name, p.x, p.y - 10);
+            ctx.font = "10px Arial";
+            ctx.fillText(id.substring(0,5), p.x - 15, p.y - 25);
         }
-
-        requestAnimationFrame(draw);
+        
+        requestAnimationFrame(update);
     }
-
-    draw();
-
-    // Ajustar canvas si se cambia el tamaño de ventana
-    window.onresize = () => {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    };
+    update();
 </script>
 </body>
 </html>
