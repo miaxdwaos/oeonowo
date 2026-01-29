@@ -3,38 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Multiplayer - Anti Ghosting</title>
+    <title>P2P Mobile & PC Fix</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: sans-serif; }
-        #ui { position: absolute; top: 15px; left: 15px; color: white; z-index: 10; background: rgba(0,0,0,0.85); padding: 15px; border-radius: 8px; border: 1px solid #444; }
-        .btn-exit { background: #e74c3c; color: white; border: none; padding: 10px; cursor: pointer; border-radius: 4px; display: none; margin-top: 10px; width: 100%; font-weight: bold; }
-        input { padding: 8px; border-radius: 4px; border: 1px solid #555; background: #333; color: white; width: 120px; }
-        #status-msg { margin-top: 10px; font-weight: bold; font-size: 13px; }
-        canvas { display: block; }
+        body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: sans-serif; touch-action: none; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; font-size: 14px; pointer-events: auto; }
+        #setup-controls { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+        input { padding: 8px; border-radius: 4px; border: none; background: #333; color: white; }
+        button { cursor: pointer; padding: 8px; border: none; border-radius: 4px; font-weight: bold; }
+        .btn-join { background: #2ecc71; color: white; }
+        .btn-exit { background: #e74c3c; color: white; display: none; }
+        .btn-fs { background: #555; color: white; margin-top: 5px; font-size: 10px; }
+        #status-msg { margin-top: 8px; color: #ffcc00; font-weight: bold; }
         
+        /* Joystick optimizado para pulgares */
         #joystick-container {
-            position: absolute; bottom: 40px; left: 40px;
-            width: 100px; height: 100px; background: rgba(255,255,255,0.1);
-            border-radius: 50%; touch-action: none; border: 2px solid rgba(255,255,255,0.2);
+            position: absolute; bottom: 30px; left: 30px;
+            width: 110px; height: 110px; background: rgba(255,255,255,0.1);
+            border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); touch-action: none;
         }
         #joystick-knob {
-            position: absolute; width: 40px; height: 40px;
+            position: absolute; width: 45px; height: 45px;
             background: rgba(255,255,255,0.5); border-radius: 50%;
-            top: 30px; left: 30px; pointer-events: none;
+            top: 32.5px; left: 32.5px; pointer-events: none;
         }
+        canvas { display: block; touch-action: none; }
     </style>
 </head>
 <body>
 
 <div id="ui">
-    <div>Tu ID: <b id="my-id" style="color:#3498db">Cargando...</b></div>
-    <div id="setup-controls" style="margin-top:10px;">
+    <div>Tu ID: <b id="my-id" style="color:#3498db">...</b></div>
+    <div id="setup-controls">
         <input type="text" id="peer-id-input" placeholder="ID del Host">
-        <button onclick="connectToHost()" style="background: #2ecc71; color: white; border: none; padding: 8px 12px; cursor: pointer; border-radius: 4px;">Unirse</button>
+        <button class="btn-join" onclick="connectToHost()">UNIRSE A ROOM</button>
     </div>
-    <button id="exit-btn" class="btn-exit" onclick="exitGame()">ABANDONAR PARTIDA</button>
-    <div id="status-msg">Estado: Sin conexión</div>
+    <button id="exit-btn" class="btn-exit" onclick="location.reload()">SALIR</button>
+    <button class="btn-fs" onclick="document.documentElement.requestFullscreen()">PANTALLA COMPLETA</button>
+    <div id="status-msg">Estado: Solo (Esperando...)</div>
 </div>
 
 <div id="joystick-container"><div id="joystick-knob"></div></div>
@@ -48,58 +54,53 @@
 
     const peer = new Peer();
     let myId, hostConn;
-    let connections = {}; // Usamos objeto para mejor control
+    let connections = {}; 
     let players = {}; 
     const SPEED = 5;
 
     peer.on('open', (id) => {
         myId = id;
         document.getElementById('my-id').innerText = id;
-        players[id] = { x: 100, y: 100, color: '#3498db', lastSeen: Date.now() };
-        updateStatus();
+        players[id] = { x: canvas.width/2, y: canvas.height/2, color: '#3498db', lastSeen: Date.now() };
     });
 
-    // --- LÓGICA DE SERVIDOR (HOST) ---
+    // --- LÓGICA DEL HOST (SERVIDOR) ---
     peer.on('connection', (conn) => {
         conn.on('open', () => {
             connections[conn.peer] = conn;
-            players[conn.peer] = { x: 150, y: 150, color: '#e74c3c', lastSeen: Date.now() };
-            updateStatus();
+            players[conn.peer] = { x: 100, y: 100, color: '#e74c3c', lastSeen: Date.now() };
+            // Forzar actualización inmediata al conectar
+            broadcast({ type: 'update', players: players });
+            actualizarInterfaz();
         });
 
         conn.on('data', (data) => {
-            if (data.type === 'move') {
-                if (players[data.id]) {
-                    players[data.id].x = data.x;
-                    players[data.id].y = data.y;
-                    players[data.id].lastSeen = Date.now(); // Actualizar latido
-                }
+            if (data.type === 'move' && players[data.id]) {
+                players[data.id].x = data.x;
+                players[data.id].y = data.y;
+                players[data.id].lastSeen = Date.now();
             }
         });
     });
 
-    // SISTEMA ANTI-FANTASMAS (Solo el Host limpia)
+    // Limpiador de fantasmas cada segundo
     setInterval(() => {
-        const now = Date.now();
-        let changed = false;
-
+        let huboCambio = false;
+        const ahora = Date.now();
         for (let id in players) {
-            if (id !== myId && now - players[id].lastSeen > 3000) { // 3 segundos sin datos
+            if (id !== myId && ahora - players[id].lastSeen > 3000) {
                 delete players[id];
-                if (connections[id]) {
-                    connections[id].close();
-                    delete connections[id];
-                }
-                changed = true;
+                if(connections[id]) { connections[id].close(); delete connections[id]; }
+                huboCambio = true;
             }
         }
-        if (changed || Object.keys(connections).length > 0) {
+        if (huboCambio || Object.keys(connections).length > 0) {
             broadcast({ type: 'update', players: players });
-            updateStatus();
+            actualizarInterfaz();
         }
     }, 1000);
 
-    // --- LÓGICA DE CLIENTE ---
+    // --- LÓGICA DEL CLIENTE ---
     function connectToHost() {
         const hostId = document.getElementById('peer-id-input').value;
         if (!hostId) return;
@@ -109,17 +110,16 @@
         hostConn.on('open', () => {
             document.getElementById('setup-controls').style.display = 'none';
             document.getElementById('exit-btn').style.display = 'block';
-            document.getElementById('status-msg').innerText = "Estado: En sala";
         });
 
         hostConn.on('data', (data) => {
             if (data.type === 'update') {
                 players = data.players;
-                updateStatus();
+                actualizarInterfaz(); // <--- IMPORTANTE: Actualiza el texto en el cliente
             }
         });
 
-        hostConn.on('close', () => location.reload());
+        hostConn.on('close', () => { alert("Host desconectado"); location.reload(); });
     }
 
     function broadcast(data) {
@@ -128,17 +128,19 @@
         }
     }
 
-    function updateStatus() {
+    function actualizarInterfaz() {
         const count = Object.keys(players).length;
         const msg = document.getElementById('status-msg');
-        msg.innerHTML = count > 1 ? `Jugadores: <span style="color:#2ecc71">${count}</span>` : "Esperando jugadores...";
+        if (count > 1) {
+            msg.innerText = "Jugadores: " + count;
+            msg.style.color = "#2ecc71";
+        } else {
+            msg.innerText = "Estado: Solo (Esperando...)";
+            msg.style.color = "#ffcc00";
+        }
     }
 
-    function exitGame() {
-        location.reload(); 
-    }
-
-    // --- CONTROLES Y RENDER ---
+    // --- CONTROLES ---
     let keys = {};
     let joyX = 0, joyY = 0;
     window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
@@ -146,23 +148,28 @@
 
     const knob = document.getElementById('joystick-knob');
     const container = document.getElementById('joystick-container');
-    container.addEventListener('touchstart', handleStick);
-    container.addEventListener('touchmove', (e) => { e.preventDefault(); handleStick(e); }, {passive: false});
-    container.addEventListener('touchend', () => { joyX = 0; joyY = 0; knob.style.transform = 'translate(0,0)'; });
-
-    function handleStick(e) {
-        const rect = container.getBoundingClientRect();
+    
+    const handleStick = (e) => {
+        e.preventDefault();
         const touch = e.touches[0];
-        const dx = touch.clientX - (rect.left + rect.width / 2);
-        const dy = touch.clientY - (rect.top + rect.height / 2);
+        const rect = container.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const dx = touch.clientX - centerX;
+        const dy = touch.clientY - centerY;
         const dist = Math.min(Math.sqrt(dx*dx + dy*dy), 40);
         const angle = Math.atan2(dy, dx);
         joyX = Math.cos(angle) * (dist / 40) * SPEED;
         joyY = Math.sin(angle) * (dist / 40) * SPEED;
         knob.style.transform = `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px)`;
-    }
+    };
 
-    function gameLoop() {
+    container.addEventListener('touchstart', handleStick);
+    container.addEventListener('touchmove', handleStick);
+    container.addEventListener('touchend', () => { joyX = 0; joyY = 0; knob.style.transform = 'translate(0,0)'; });
+
+    // --- LOOP ---
+    function loop() {
         if (players[myId]) {
             if (keys['w'] || keys['arrowup']) players[myId].y -= SPEED;
             if (keys['s'] || keys['arrowdown']) players[myId].y += SPEED;
@@ -171,7 +178,7 @@
             players[myId].x += joyX;
             players[myId].y += joyY;
 
-            // Enviar posición al host
+            // Enviar datos si soy cliente
             if (hostConn && hostConn.open) {
                 hostConn.send({ type: 'move', id: myId, x: players[myId].x, y: players[myId].y });
             }
@@ -183,15 +190,22 @@
         for (let id in players) {
             ctx.fillStyle = players[id].color;
             ctx.beginPath();
-            ctx.arc(players[id].x, players[id].y, 20, 0, Math.PI*2);
+            ctx.arc(players[id].x, players[id].y, 18, 0, Math.PI*2);
             ctx.fill();
             ctx.fillStyle = "white";
             ctx.textAlign = "center";
-            ctx.fillText(id === myId ? "TÚ" : "Invitado", players[id].x, players[id].y - 30);
+            ctx.font = "bold 12px sans-serif";
+            ctx.fillText(id === myId ? "TÚ" : "JUGADOR", players[id].x, players[id].y - 25);
         }
-        requestAnimationFrame(gameLoop);
+        requestAnimationFrame(loop);
     }
-    gameLoop();
+    loop();
+
+    // Ajustar canvas si se gira el celular
+    window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    });
 </script>
 </body>
 </html>
