@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P No-Flicker Game</title>
+    <title>P2P Multiplayer - Colors</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: sans-serif; touch-action: none; }
@@ -55,20 +55,41 @@
     let players = {}; 
     const SPEED = 5;
 
+    // Función para generar un color aleatorio brillante
+    function getRandomColor() {
+        const letters = '0123456789ABCDEF';
+        let color = '#';
+        for (let i = 0; i < 6; i++) {
+            // Aseguramos que no sea demasiado oscuro (evitando los primeros números)
+            color += letters[Math.floor(Math.random() * 12) + 4]; 
+        }
+        return color;
+    }
+
     peer.on('open', (id) => {
         myId = id;
         document.getElementById('my-id').innerText = id;
-        // Creamos nuestro jugador local
-        players[id] = { x: canvas.width/2, y: canvas.height/2, color: '#3498db', lastSeen: Date.now() };
+        // Asignar color aleatorio al iniciar
+        players[id] = { 
+            x: canvas.width/2, 
+            y: canvas.height/2, 
+            color: getRandomColor(), 
+            lastSeen: Date.now() 
+        };
     });
 
     // --- LÓGICA DEL HOST ---
     peer.on('connection', (conn) => {
         conn.on('open', () => {
             connections[conn.peer] = conn;
-            // Solo creamos al jugador si no existe para evitar parpadeo
             if (!players[conn.peer]) {
-                players[conn.peer] = { x: 100, y: 100, color: '#e74c3c', lastSeen: Date.now() };
+                // El Host le asigna un color al nuevo jugador
+                players[conn.peer] = { 
+                    x: 100, 
+                    y: 100, 
+                    color: getRandomColor(), 
+                    lastSeen: Date.now() 
+                };
             }
             broadcastUpdate();
         });
@@ -77,21 +98,19 @@
             if (data.type === 'move' && players[data.id]) {
                 players[data.id].x = data.x;
                 players[data.id].y = data.y;
-                players[data.id].lastSeen = Date.now(); // Actualizamos latido
+                players[data.id].lastSeen = Date.now();
             }
         });
 
         conn.on('close', () => removePlayer(conn.peer));
     });
 
-    // Limpiador de desconectados (solo en el Host)
     setInterval(() => {
         if (Object.keys(connections).length === 0) return;
-        
         let changed = false;
         const now = Date.now();
         for (let id in players) {
-            if (id !== myId && now - players[id].lastSeen > 4000) { // Margen de 4 seg
+            if (id !== myId && now - players[id].lastSeen > 4000) {
                 removePlayer(id);
                 changed = true;
             }
@@ -129,12 +148,10 @@
 
         hostConn.on('data', (data) => {
             if (data.type === 'update') {
-                // Sincronizar lista de jugadores evitando borrarme a mí mismo
                 const serverPlayers = data.players;
                 for (let id in serverPlayers) {
                     if (id !== myId) players[id] = serverPlayers[id];
                 }
-                // Limpiar jugadores que ya no están en el servidor
                 for (let id in players) {
                     if (id !== myId && !serverPlayers[id]) delete players[id];
                 }
@@ -178,7 +195,6 @@
     // --- LOOP PRINCIPAL ---
     function loop() {
         if (players[myId]) {
-            // Movimiento local
             if (keys['w']) players[myId].y -= SPEED;
             if (keys['s']) players[myId].y += SPEED;
             if (keys['a']) players[myId].x -= SPEED;
@@ -186,11 +202,9 @@
             players[myId].x += joyX;
             players[myId].y += joyY;
 
-            // Enviar posición al host
             if (hostConn && hostConn.open) {
                 hostConn.send({ type: 'move', id: myId, x: players[myId].x, y: players[myId].y });
             }
-            // Si soy el host, yo mismo soy el "servidor", así que mando mis datos a todos
             if (Object.keys(connections).length > 0) {
                 broadcastUpdate();
             }
@@ -200,13 +214,22 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
         for (let id in players) {
-            ctx.fillStyle = players[id].color;
+            const p = players[id];
+            // Sombra/Brillo del jugador
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = p.color;
+            
+            ctx.fillStyle = p.color;
             ctx.beginPath();
-            ctx.arc(players[id].x, players[id].y, 20, 0, Math.PI*2);
+            ctx.arc(p.x, p.y, 20, 0, Math.PI*2);
             ctx.fill();
+            
+            // Reset de sombra para el texto
+            ctx.shadowBlur = 0;
             ctx.fillStyle = "white";
             ctx.textAlign = "center";
-            ctx.fillText(id === myId ? "TÚ" : "PLAYER", players[id].x, players[id].y - 30);
+            ctx.font = "bold 12px Arial";
+            ctx.fillText(id === myId ? "TÚ" : "PLAYER", p.x, p.y - 30);
         }
         requestAnimationFrame(loop);
     }
