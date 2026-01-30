@@ -3,17 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Instant Fix</title>
+    <title>Multiplayer - Stable P2P</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; touch-action: none; }
-        #ui { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; background: rgba(0,0,0,0.9); padding: 15px; border-radius: 10px; border: 1px solid #333; }
-        input { padding: 8px; border-radius: 4px; border: none; background: #222; color: white; margin-bottom: 5px; width: 140px; }
-        button { cursor: pointer; padding: 8px 12px; border: none; border-radius: 4px; font-weight: bold; transition: 0.2s; }
+        body { margin: 0; overflow: hidden; background: #0f0f0f; font-family: 'Segoe UI', sans-serif; touch-action: none; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; background: rgba(0,0,0,0.85); padding: 15px; border-radius: 10px; border: 1px solid #333; pointer-events: auto; }
+        input { padding: 8px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; margin-bottom: 8px; width: 150px; }
+        button { cursor: pointer; padding: 8px 15px; border: none; border-radius: 4px; font-weight: bold; }
         .btn-join { background: #2ecc71; color: white; }
-        .btn-join:hover { background: #27ae60; }
         .btn-exit { background: #e74c3c; color: white; display: none; margin-top: 10px; width: 100%; }
-        #status-msg { margin-top: 10px; font-size: 14px; font-weight: bold; }
+        #status-msg { margin-top: 10px; font-size: 13px; font-weight: bold; transition: color 0.3s; }
         
         #joystick-container {
             position: absolute; bottom: 40px; left: 40px;
@@ -30,13 +29,13 @@
 <body>
 
 <div id="ui">
-    <div>Tu ID: <b id="my-id" style="color:#3498db">Generando...</b></div>
+    <div>Tu ID: <b id="my-id" style="color:#3498db">Cargando...</b></div>
     <div id="setup-controls" style="margin-top:10px;">
-        <input type="text" id="peer-id-input" placeholder="Pegar ID del Host">
+        <input type="text" id="peer-id-input" placeholder="ID del Host">
         <button class="btn-join" onclick="connectToHost()">CONECTAR</button>
     </div>
     <button id="exit-btn" class="btn-exit" onclick="location.reload()">ABANDONAR</button>
-    <div id="status-msg" style="color: #f1c40f;">Estado: Sin jugadores</div>
+    <div id="status-msg" style="color: #f1c40f;">Estado: Solo</div>
 </div>
 
 <div id="joystick-container"><div id="joystick-knob"></div></div>
@@ -52,7 +51,7 @@
     let myId, hostConn;
     let connections = {}; 
     let players = {}; 
-    const SPEED = 6;
+    const SPEED = 5;
 
     function getRandomColor() {
         return `hsl(${Math.random() * 360}, 70%, 60%)`;
@@ -64,60 +63,58 @@
         players[id] = { x: canvas.width/2, y: canvas.height/2, color: getRandomColor(), lastSeen: Date.now() };
     });
 
-    // --- LOGICA DEL HOST (SERVIDOR) ---
+    // --- LÓGICA DEL HOST ---
     peer.on('connection', (conn) => {
         conn.on('open', () => {
             connections[conn.peer] = conn;
+            // Solo creamos al jugador en el momento exacto de la conexión
             players[conn.peer] = { x: 100, y: 100, color: getRandomColor(), lastSeen: Date.now() };
-            sync();
+            syncToAll();
         });
 
         conn.on('data', (data) => {
-            if (data.type === 'ping' && players[data.id]) {
+            // SEGURIDAD: Solo procesar datos de IDs que están en la lista de conexiones activas
+            if (data.type === 'move' && connections[data.id] && players[data.id]) {
                 players[data.id].x = data.x;
                 players[data.id].y = data.y;
-                players[data.id].lastSeen = Date.now(); // Marca de tiempo vital
+                players[data.id].lastSeen = Date.now();
             }
         });
 
-        conn.on('close', () => removePlayer(conn.peer));
+        conn.on('close', () => forceDisconnect(conn.peer));
     });
 
-    // MONITOR DE DESCONEXIÓN ULTRA RÁPIDO (Corre cada 500ms)
+    // Limpiador agresivo pero seguro
     setInterval(() => {
-        let changed = false;
         const now = Date.now();
+        let changed = false;
         for (let id in players) {
-            if (id !== myId && now - players[id].lastSeen > 1500) { // Si no responde en 1.5 seg, fuera.
-                console.log("Eliminando fantasma:", id);
-                delete players[id];
-                if (connections[id]) {
-                    connections[id].close();
-                    delete connections[id];
-                }
+            if (id !== myId && now - players[id].lastSeen > 2000) { 
+                forceDisconnect(id);
                 changed = true;
             }
         }
-        if (changed) sync();
-    }, 500);
+        if (changed) syncToAll();
+    }, 1000);
 
-    function removePlayer(id) {
-        if (players[id]) {
-            delete players[id];
+    function forceDisconnect(id) {
+        if (players[id]) delete players[id];
+        if (connections[id]) {
+            connections[id].close();
             delete connections[id];
-            sync();
         }
+        syncToAll();
     }
 
-    function sync() {
-        const data = { type: 'update', players: players };
+    function syncToAll() {
+        const payload = { type: 'update', players: players };
         for (let id in connections) {
-            if (connections[id].open) connections[id].send(data);
+            if (connections[id].open) connections[id].send(payload);
         }
         updateUI();
     }
 
-    // --- LOGICA DEL CLIENTE ---
+    // --- LÓGICA DEL CLIENTE ---
     function connectToHost() {
         const hostId = document.getElementById('peer-id-input').value;
         if (!hostId) return;
@@ -127,40 +124,47 @@
             document.getElementById('setup-controls').style.display = 'none';
             document.getElementById('exit-btn').style.display = 'block';
             
-            // Envío constante de señales de vida (Ping)
+            // Envío constante de Ping
             setInterval(() => {
-                if (hostConn.open && players[myId]) {
-                    hostConn.send({ type: 'ping', id: myId, x: players[myId].x, y: players[myId].y });
+                if (hostConn && hostConn.open) {
+                    hostConn.send({ type: 'move', id: myId, x: players[myId].x, y: players[myId].y });
                 }
-            }, 50);
+            }, 40);
         });
 
         hostConn.on('data', (data) => {
             if (data.type === 'update') {
-                const incoming = data.players;
-                // Actualizar todos menos a mí mismo para evitar tirones
-                for (let id in incoming) {
-                    if (id !== myId) players[id] = incoming[id];
+                // Sincronización inteligente (no sobrescribir a uno mismo)
+                const remotePlayers = data.players;
+                for (let id in remotePlayers) {
+                    if (id !== myId) players[id] = remotePlayers[id];
                 }
-                // Borrar los que el host ya no tiene
+                // Limpiar los que el Host ya borró
                 for (let id in players) {
-                    if (id !== myId && !incoming[id]) delete players[id];
+                    if (id !== myId && !remotePlayers[id]) delete players[id];
                 }
                 updateUI();
             }
         });
 
-        hostConn.on('close', () => location.reload());
+        hostConn.on('close', () => {
+            location.reload();
+        });
     }
 
     function updateUI() {
         const count = Object.keys(players).length;
         const msg = document.getElementById('status-msg');
-        msg.innerText = count > 1 ? `Jugadores: ${count}` : "Estado: Sin jugadores";
-        msg.style.color = count > 1 ? "#2ecc71" : "#f1c40f";
+        if (count > 1) {
+            msg.innerText = `Jugadores en línea: ${count}`;
+            msg.style.color = "#2ecc71";
+        } else {
+            msg.innerText = "Estado: Solo";
+            msg.style.color = "#f1c40f";
+        }
     }
 
-    // --- CONTROLES (WASD + JOYSTICK) ---
+    // --- CONTROLES ---
     let keys = {};
     let joyX = 0, joyY = 0;
     window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
@@ -168,7 +172,7 @@
 
     const knob = document.getElementById('joystick-knob');
     const container = document.getElementById('joystick-container');
-    const move = (e) => {
+    const moveStick = (e) => {
         const t = e.touches ? e.touches[0] : e;
         const r = container.getBoundingClientRect();
         const dx = t.clientX - (r.left + r.width/2);
@@ -179,8 +183,8 @@
         joyY = Math.sin(a) * (d/40) * SPEED;
         knob.style.transform = `translate(${Math.cos(a)*d}px, ${Math.sin(a)*d}px)`;
     };
-    container.addEventListener('touchstart', (e) => { e.preventDefault(); move(e); });
-    container.addEventListener('touchmove', (e) => { e.preventDefault(); move(e); });
+    container.addEventListener('touchstart', (e) => { e.preventDefault(); moveStick(e); });
+    container.addEventListener('touchmove', (e) => { e.preventDefault(); moveStick(e); });
     container.addEventListener('touchend', () => { joyX = 0; joyY = 0; knob.style.transform = 'translate(0,0)'; });
 
     // --- RENDER ---
@@ -193,27 +197,37 @@
             players[myId].x += joyX;
             players[myId].y += joyY;
 
-            // El Host sincroniza a todos en cada frame de dibujo
-            if (Object.keys(connections).length > 0) sync();
+            // Evitar salir de bordes
+            players[myId].x = Math.max(20, Math.min(canvas.width - 20, players[myId].x));
+            players[myId].y = Math.max(20, Math.min(canvas.height - 20, players[myId].y));
         }
 
-        ctx.fillStyle = '#111';
+        ctx.fillStyle = '#0f0f0f';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         
         for (let id in players) {
             const p = players[id];
-            ctx.shadowBlur = 15; ctx.shadowColor = p.color;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = p.color;
             ctx.fillStyle = p.color;
-            ctx.beginPath(); ctx.arc(p.x, p.y, 20, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 20, 0, Math.PI*2);
+            ctx.fill();
+            
             ctx.shadowBlur = 0;
-            ctx.fillStyle = "white"; ctx.textAlign = "center";
+            ctx.fillStyle = "white";
+            ctx.textAlign = "center";
+            ctx.font = "bold 12px Arial";
             ctx.fillText(id === myId ? "TÚ" : "PLAYER", p.x, p.y - 30);
         }
         requestAnimationFrame(render);
     }
     render();
 
-    window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
+    window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    });
 </script>
 </body>
 </html>
