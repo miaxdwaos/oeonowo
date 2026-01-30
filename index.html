@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2P Multiplayer - Colors</title>
+    <title>P2P Instant Exit</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #1a1a1a; font-family: sans-serif; touch-action: none; }
-        #ui { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; pointer-events: auto; border: 1px solid #444; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; background: rgba(0,0,0,0.8); padding: 12px; border-radius: 8px; border: 1px solid #444; }
         #setup-controls { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
         input { padding: 8px; border-radius: 4px; border: none; background: #333; color: white; border: 1px solid #555; }
         button { cursor: pointer; padding: 8px; border: none; border-radius: 4px; font-weight: bold; }
         .btn-join { background: #2ecc71; color: white; }
-        .btn-exit { background: #e74c3c; color: white; display: none; }
+        .btn-exit { background: #e74c3c; color: white; display: none; margin-top: 10px; width: 100%; }
         #status-msg { margin-top: 8px; color: #ffcc00; font-weight: bold; }
         
         #joystick-container {
@@ -31,13 +31,13 @@
 <body>
 
 <div id="ui">
-    <div>ID: <b id="my-id" style="color:#3498db">...</b></div>
+    <div>Tu ID: <b id="my-id" style="color:#3498db">...</b></div>
     <div id="setup-controls">
         <input type="text" id="peer-id-input" placeholder="ID del Host">
-        <button class="btn-join" onclick="connectToHost()">UNIRSE</button>
+        <button class="btn-join" onclick="connectToHost()">UNIRSE AL ROOM</button>
     </div>
-    <button id="exit-btn" class="btn-exit" onclick="location.reload()">SALIR</button>
-    <div id="status-msg">Estado: Solo</div>
+    <button id="exit-btn" class="btn-exit" onclick="manualExit()">SALIR DEL JUEGO</button>
+    <div id="status-msg">Estado: Sin conexión</div>
 </div>
 
 <div id="joystick-container"><div id="joystick-knob"></div></div>
@@ -55,42 +55,24 @@
     let players = {}; 
     const SPEED = 5;
 
-    // Función para generar un color aleatorio brillante
     function getRandomColor() {
-        const letters = '0123456789ABCDEF';
+        const letters = '89ABCDEF'; // Colores claros
         let color = '#';
-        for (let i = 0; i < 6; i++) {
-            // Aseguramos que no sea demasiado oscuro (evitando los primeros números)
-            color += letters[Math.floor(Math.random() * 12) + 4]; 
-        }
+        for (let i = 0; i < 6; i++) color += letters[Math.floor(Math.random() * letters.length)];
         return color;
     }
 
     peer.on('open', (id) => {
         myId = id;
         document.getElementById('my-id').innerText = id;
-        // Asignar color aleatorio al iniciar
-        players[id] = { 
-            x: canvas.width/2, 
-            y: canvas.height/2, 
-            color: getRandomColor(), 
-            lastSeen: Date.now() 
-        };
+        players[id] = { x: canvas.width/2, y: canvas.height/2, color: getRandomColor(), lastSeen: Date.now() };
     });
 
     // --- LÓGICA DEL HOST ---
     peer.on('connection', (conn) => {
         conn.on('open', () => {
             connections[conn.peer] = conn;
-            if (!players[conn.peer]) {
-                // El Host le asigna un color al nuevo jugador
-                players[conn.peer] = { 
-                    x: 100, 
-                    y: 100, 
-                    color: getRandomColor(), 
-                    lastSeen: Date.now() 
-                };
-            }
+            players[conn.peer] = { x: 100, y: 100, color: getRandomColor(), lastSeen: Date.now() };
             broadcastUpdate();
         });
 
@@ -100,31 +82,24 @@
                 players[data.id].y = data.y;
                 players[data.id].lastSeen = Date.now();
             }
+            if (data.type === 'leave') {
+                removePlayer(data.id);
+            }
         });
 
+        // Evento inmediato de desconexión detectado por el navegador
         conn.on('close', () => removePlayer(conn.peer));
     });
 
-    setInterval(() => {
-        if (Object.keys(connections).length === 0) return;
-        let changed = false;
-        const now = Date.now();
-        for (let id in players) {
-            if (id !== myId && now - players[id].lastSeen > 4000) {
-                removePlayer(id);
-                changed = true;
-            }
-        }
-        if (changed) broadcastUpdate();
-    }, 2000);
-
     function removePlayer(id) {
-        delete players[id];
-        if (connections[id]) {
-            connections[id].close();
-            delete connections[id];
+        if (players[id]) {
+            delete players[id];
+            if (connections[id]) {
+                connections[id].close();
+                delete connections[id];
+            }
+            broadcastUpdate();
         }
-        broadcastUpdate();
     }
 
     function broadcastUpdate() {
@@ -149,6 +124,7 @@
         hostConn.on('data', (data) => {
             if (data.type === 'update') {
                 const serverPlayers = data.players;
+                // Sincronizar conservando mi color local si el host no lo tiene bien
                 for (let id in serverPlayers) {
                     if (id !== myId) players[id] = serverPlayers[id];
                 }
@@ -158,14 +134,40 @@
                 actualizarInterfaz();
             }
         });
+
+        hostConn.on('close', () => {
+            alert("Te has desconectado del Room");
+            location.reload();
+        });
     }
 
     function actualizarInterfaz() {
         const count = Object.keys(players).length;
         const msg = document.getElementById('status-msg');
-        msg.innerText = count > 1 ? `Jugadores: ${count}` : "Estado: Solo";
+        msg.innerText = count > 1 ? `Jugadores: ${count}` : "Estado: Solo (Esperando...)";
         msg.style.color = count > 1 ? "#2ecc71" : "#ffcc00";
     }
+
+    // --- SALIDA INSTANTÁNEA (PC Y CELULAR) ---
+    function manualExit() {
+        if (hostConn && hostConn.open) {
+            hostConn.send({ type: 'leave', id: myId });
+            setTimeout(() => {
+                peer.destroy();
+                location.reload();
+            }, 100);
+        } else {
+            location.reload();
+        }
+    }
+
+    // Detectar cierre de pestaña o navegador inmediatamente
+    window.addEventListener('beforeunload', () => {
+        if (hostConn && hostConn.open) {
+            hostConn.send({ type: 'leave', id: myId });
+        }
+        peer.destroy();
+    });
 
     // --- CONTROLES ---
     let keys = {};
@@ -175,7 +177,6 @@
 
     const knob = document.getElementById('joystick-knob');
     const container = document.getElementById('joystick-container');
-    
     const handleStick = (e) => {
         const touch = e.touches ? e.touches[0] : e;
         const rect = container.getBoundingClientRect();
@@ -187,12 +188,11 @@
         joyY = Math.sin(angle) * (dist / 30) * SPEED;
         knob.style.transform = `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px)`;
     };
-
     container.addEventListener('touchstart', (e) => { e.preventDefault(); handleStick(e); });
     container.addEventListener('touchmove', (e) => { e.preventDefault(); handleStick(e); });
     container.addEventListener('touchend', () => { joyX = 0; joyY = 0; knob.style.transform = 'translate(0,0)'; });
 
-    // --- LOOP PRINCIPAL ---
+    // --- LOOP ---
     function loop() {
         if (players[myId]) {
             if (keys['w']) players[myId].y -= SPEED;
@@ -215,20 +215,15 @@
         
         for (let id in players) {
             const p = players[id];
-            // Sombra/Brillo del jugador
-            ctx.shadowBlur = 15;
+            ctx.shadowBlur = 10;
             ctx.shadowColor = p.color;
-            
             ctx.fillStyle = p.color;
             ctx.beginPath();
             ctx.arc(p.x, p.y, 20, 0, Math.PI*2);
             ctx.fill();
-            
-            // Reset de sombra para el texto
             ctx.shadowBlur = 0;
             ctx.fillStyle = "white";
             ctx.textAlign = "center";
-            ctx.font = "bold 12px Arial";
             ctx.fillText(id === myId ? "TÚ" : "PLAYER", p.x, p.y - 30);
         }
         requestAnimationFrame(loop);
