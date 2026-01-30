@@ -3,16 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Multiplayer - Stable P2P</title>
+    <title>P2P Fixed Visibility</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #0f0f0f; font-family: 'Segoe UI', sans-serif; touch-action: none; }
-        #ui { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; background: rgba(0,0,0,0.85); padding: 15px; border-radius: 10px; border: 1px solid #333; pointer-events: auto; }
-        input { padding: 8px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; margin-bottom: 8px; width: 150px; }
-        button { cursor: pointer; padding: 8px 15px; border: none; border-radius: 4px; font-weight: bold; }
-        .btn-join { background: #2ecc71; color: white; }
-        .btn-exit { background: #e74c3c; color: white; display: none; margin-top: 10px; width: 100%; }
-        #status-msg { margin-top: 10px; font-size: 13px; font-weight: bold; transition: color 0.3s; }
+        body { margin: 0; overflow: hidden; background: #0f0f0f; font-family: sans-serif; touch-action: none; }
+        #ui { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; background: rgba(0,0,0,0.85); padding: 15px; border-radius: 10px; border: 1px solid #333; }
+        input { padding: 8px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; width: 140px; margin-bottom: 5px; }
+        button { cursor: pointer; padding: 8px 12px; border: none; border-radius: 4px; font-weight: bold; background: #2ecc71; color: white; }
+        .btn-exit { background: #e74c3c; display: none; margin-top: 10px; width: 100%; }
+        #status-msg { margin-top: 8px; font-size: 13px; font-weight: bold; }
         
         #joystick-container {
             position: absolute; bottom: 40px; left: 40px;
@@ -30,9 +29,9 @@
 
 <div id="ui">
     <div>Tu ID: <b id="my-id" style="color:#3498db">Cargando...</b></div>
-    <div id="setup-controls" style="margin-top:10px;">
+    <div id="setup-controls">
         <input type="text" id="peer-id-input" placeholder="ID del Host">
-        <button class="btn-join" onclick="connectToHost()">CONECTAR</button>
+        <button onclick="connectToHost()">CONECTAR</button>
     </div>
     <button id="exit-btn" class="btn-exit" onclick="location.reload()">ABANDONAR</button>
     <div id="status-msg" style="color: #f1c40f;">Estado: Solo</div>
@@ -66,53 +65,30 @@
     // --- LÓGICA DEL HOST ---
     peer.on('connection', (conn) => {
         conn.on('open', () => {
+            console.log("Nuevo invitado:", conn.peer);
             connections[conn.peer] = conn;
-            // Solo creamos al jugador en el momento exacto de la conexión
             players[conn.peer] = { x: 100, y: 100, color: getRandomColor(), lastSeen: Date.now() };
-            syncToAll();
+            
+            // EL TRUCO: El host envía la lista de jugadores INMEDIATAMENTE al abrir la conexión
+            setTimeout(() => {
+                syncToAll();
+            }, 500); 
         });
 
         conn.on('data', (data) => {
-            // SEGURIDAD: Solo procesar datos de IDs que están en la lista de conexiones activas
-            if (data.type === 'move' && connections[data.id] && players[data.id]) {
+            if (data.type === 'move' && players[data.id]) {
                 players[data.id].x = data.x;
                 players[data.id].y = data.y;
                 players[data.id].lastSeen = Date.now();
             }
         });
 
-        conn.on('close', () => forceDisconnect(conn.peer));
+        conn.on('close', () => {
+            delete players[conn.peer];
+            delete connections[conn.peer];
+            syncToAll();
+        });
     });
-
-    // Limpiador agresivo pero seguro
-    setInterval(() => {
-        const now = Date.now();
-        let changed = false;
-        for (let id in players) {
-            if (id !== myId && now - players[id].lastSeen > 2000) { 
-                forceDisconnect(id);
-                changed = true;
-            }
-        }
-        if (changed) syncToAll();
-    }, 1000);
-
-    function forceDisconnect(id) {
-        if (players[id]) delete players[id];
-        if (connections[id]) {
-            connections[id].close();
-            delete connections[id];
-        }
-        syncToAll();
-    }
-
-    function syncToAll() {
-        const payload = { type: 'update', players: players };
-        for (let id in connections) {
-            if (connections[id].open) connections[id].send(payload);
-        }
-        updateUI();
-    }
 
     // --- LÓGICA DEL CLIENTE ---
     function connectToHost() {
@@ -124,47 +100,46 @@
             document.getElementById('setup-controls').style.display = 'none';
             document.getElementById('exit-btn').style.display = 'block';
             
-            // Envío constante de Ping
+            // Ciclo de movimiento del cliente
             setInterval(() => {
                 if (hostConn && hostConn.open) {
                     hostConn.send({ type: 'move', id: myId, x: players[myId].x, y: players[myId].y });
                 }
-            }, 40);
+            }, 50);
         });
 
         hostConn.on('data', (data) => {
             if (data.type === 'update') {
-                // Sincronización inteligente (no sobrescribir a uno mismo)
-                const remotePlayers = data.players;
-                for (let id in remotePlayers) {
-                    if (id !== myId) players[id] = remotePlayers[id];
+                const incoming = data.players;
+                // Mezclar datos: mantener los míos, actualizar el resto
+                for (let id in incoming) {
+                    if (id !== myId) players[id] = incoming[id];
                 }
-                // Limpiar los que el Host ya borró
+                // Borrar desaparecidos
                 for (let id in players) {
-                    if (id !== myId && !remotePlayers[id]) delete players[id];
+                    if (id !== myId && !incoming[id]) delete players[id];
                 }
                 updateUI();
             }
         });
+    }
 
-        hostConn.on('close', () => {
-            location.reload();
-        });
+    function syncToAll() {
+        const payload = { type: 'update', players: players };
+        for (let id in connections) {
+            if (connections[id].open) connections[id].send(payload);
+        }
+        updateUI();
     }
 
     function updateUI() {
         const count = Object.keys(players).length;
         const msg = document.getElementById('status-msg');
-        if (count > 1) {
-            msg.innerText = `Jugadores en línea: ${count}`;
-            msg.style.color = "#2ecc71";
-        } else {
-            msg.innerText = "Estado: Solo";
-            msg.style.color = "#f1c40f";
-        }
+        msg.innerText = count > 1 ? `Jugadores: ${count}` : "Estado: Solo";
+        msg.style.color = count > 1 ? "#2ecc71" : "#f1c40f";
     }
 
-    // --- CONTROLES ---
+    // --- CONTROLES Y RENDER ---
     let keys = {};
     let joyX = 0, joyY = 0;
     window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
@@ -172,7 +147,7 @@
 
     const knob = document.getElementById('joystick-knob');
     const container = document.getElementById('joystick-container');
-    const moveStick = (e) => {
+    const handleMove = (e) => {
         const t = e.touches ? e.touches[0] : e;
         const r = container.getBoundingClientRect();
         const dx = t.clientX - (r.left + r.width/2);
@@ -183,23 +158,21 @@
         joyY = Math.sin(a) * (d/40) * SPEED;
         knob.style.transform = `translate(${Math.cos(a)*d}px, ${Math.sin(a)*d}px)`;
     };
-    container.addEventListener('touchstart', (e) => { e.preventDefault(); moveStick(e); });
-    container.addEventListener('touchmove', (e) => { e.preventDefault(); moveStick(e); });
+    container.addEventListener('touchstart', (e) => { e.preventDefault(); handleMove(e); });
+    container.addEventListener('touchmove', (e) => { e.preventDefault(); handleMove(e); });
     container.addEventListener('touchend', () => { joyX = 0; joyY = 0; knob.style.transform = 'translate(0,0)'; });
 
-    // --- RENDER ---
     function render() {
         if (players[myId]) {
-            if (keys['w'] || keys['arrowup']) players[myId].y -= SPEED;
-            if (keys['s'] || keys['arrowdown']) players[myId].y += SPEED;
-            if (keys['a'] || keys['arrowleft']) players[myId].x -= SPEED;
-            if (keys['d'] || keys['arrowright']) players[myId].x += SPEED;
+            if (keys['w']) players[myId].y -= SPEED;
+            if (keys['s']) players[myId].y += SPEED;
+            if (keys['a']) players[myId].x -= SPEED;
+            if (keys['d']) players[myId].x += SPEED;
             players[myId].x += joyX;
             players[myId].y += joyY;
-
-            // Evitar salir de bordes
-            players[myId].x = Math.max(20, Math.min(canvas.width - 20, players[myId].x));
-            players[myId].y = Math.max(20, Math.min(canvas.height - 20, players[myId].y));
+            
+            // Si soy el Host, envío actualizaciones constantemente
+            if (Object.keys(connections).length > 0) syncToAll();
         }
 
         ctx.fillStyle = '#0f0f0f';
@@ -207,27 +180,16 @@
         
         for (let id in players) {
             const p = players[id];
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = p.color;
+            ctx.shadowBlur = 15; ctx.shadowColor = p.color;
             ctx.fillStyle = p.color;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 20, 0, Math.PI*2);
-            ctx.fill();
-            
-            ctx.shadowBlur = 0;
-            ctx.fillStyle = "white";
-            ctx.textAlign = "center";
-            ctx.font = "bold 12px Arial";
-            ctx.fillText(id === myId ? "TÚ" : "PLAYER", p.x, p.y - 30);
+            ctx.beginPath(); ctx.arc(p.x, p.y, 20, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0; ctx.fillStyle = "white"; ctx.textAlign = "center";
+            ctx.fillText(id === myId ? "TÚ" : "PLAYER", p.x, p.y - 35);
         }
         requestAnimationFrame(render);
     }
     render();
-
-    window.addEventListener('resize', () => {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    });
+    window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
 </script>
 </body>
 </html>
